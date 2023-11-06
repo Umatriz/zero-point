@@ -14,10 +14,15 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
-bevy = "0.11.0"
-bevy_proto = "0.11.0"
-ron = "0.8"
-serde = { version = "1", features = ["derive"] }
+# bevy = "0.11.0"
+bevy-inspector-egui = "0.20.0"
+noise = {version = "0.8.2", features = ["images"]}
+
+[dependencies.bevy]
+version = "0.11.0"
+features = [
+    "dynamic_linking"
+]
 
 # [workspace]
 # resolver = "2" # Important! wgpu/Bevy needs this!
