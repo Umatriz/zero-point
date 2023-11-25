@@ -14,19 +14,25 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
-# bevy = "0.11.0"
-bevy-inspector-egui = "0.20.0"
-noise = {version = "0.8.2", features = ["images"]}
+noise = { version = "0.8.2", features = ["images"] }
+rand = "0.8.5"
+ndarray = "0.15"
+image = "0.24.7"
+
+bevy_third_person_camera = "0.1.7"
+bevy-inspector-egui = "0.21.0"
+bevy_rapier3d = "0.23.0"
+bevy_atmosphere = "0.8.1"
 
 [dependencies.bevy]
-version = "0.11.0"
+version = "0.12.0"
 features = [
     "dynamic_linking"
 ]
 
 # [workspace]
 # resolver = "2" # Important! wgpu/Bevy needs this!
-# members = ["crates/*"]
+# members = ["libs/*"]
 
 # [workspace.dependencies]
 # bevy = "0.11.0"

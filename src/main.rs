@@ -1,6 +1,21 @@
 use bevy::prelude::*;
+use bevy_atmosphere::plugin::AtmospherePlugin;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy_rapier3d::prelude::*;
+use bevy_third_person_camera::ThirdPersonCameraPlugin;
+
+use camera::CameraPlugin;
+use gen::MapPlugin;
+use player::PlayerPlugin;
+use world::WorldPlugin;
 
 pub mod gen;
+pub mod logic;
+pub mod utils;
+
+pub mod camera;
+pub mod player;
+pub mod world;
 
 fn main() {
     App::new()
@@ -11,51 +26,15 @@ fn main() {
             }),
             ..Default::default()
         }))
-        .add_systems(Startup, setup)
-        .add_systems(Update, movement)
+        .add_plugins((
+            RapierPhysicsPlugin::<NoUserData>::default(),
+            RapierDebugRenderPlugin::default(),
+        ))
+        .add_plugins(WorldInspectorPlugin::new())
+        .add_plugins(ThirdPersonCameraPlugin)
+        .add_plugins(AtmospherePlugin)
+        .add_plugins((WorldPlugin, CameraPlugin, PlayerPlugin, MapPlugin))
         .run()
 }
 
-#[derive(Component)]
-struct Player;
-
-fn setup(mut commands: Commands) {
-    commands.spawn(Camera2dBundle::default());
-
-    commands.spawn((
-        Player,
-        SpriteBundle {
-            sprite: Sprite {
-                custom_size: Some(Vec2::new(100.0, 100.0)),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    ));
-}
-
-fn movement(keys: Res<Input<KeyCode>>, mut players: Query<&mut Transform, With<Player>>) {
-    let mut direction = Vec2::ZERO;
-    if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
-        direction.y += 10.;
-    }
-    if keys.any_pressed([KeyCode::Down, KeyCode::S]) {
-        direction.y -= 10.;
-    }
-    if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
-        direction.x += 10.;
-    }
-    if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
-        direction.x -= 10.;
-    }
-    if direction == Vec2::ZERO {
-        return;
-    }
-
-    let move_speed = 0.20;
-    let move_delta = (direction * move_speed).extend(0.);
-
-    for mut transform in &mut players {
-        transform.translation += move_delta;
-    }
-}
+// let lerp = |t: f64, a: DVec2, b: DVec2| a + t * (b - a);
