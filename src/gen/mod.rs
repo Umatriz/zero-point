@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use bevy::{
     app::{Plugin, Startup, Update},
     asset::{Assets, Handle},
@@ -6,12 +8,13 @@ use bevy::{
         reflect::ReflectResource,
         system::{Commands, Res, ResMut, Resource},
     },
-    math::Vec2,
+    math::{Vec2, Vec3},
     pbr::{PbrBundle, StandardMaterial},
-    reflect::Reflect,
+    reflect::{std_traits::ReflectDefault, Reflect},
     render::{
         color::Color,
         mesh::{shape::Plane, Mesh, VertexAttributeValues},
+        render_resource::PrimitiveTopology,
     },
     transform::components::Transform,
 };
@@ -34,6 +37,7 @@ impl Plugin for MapPlugin {
             .add_systems(Update, update_noise)
             .init_resource::<NoiseConfig>()
             .register_type::<NoiseConfig>()
+            .register_type::<TerrainType>()
             .add_plugins(ResourceInspectorPlugin::<NoiseConfig>::default());
     }
 }
@@ -55,25 +59,22 @@ fn spawn_noise(
     mut noise_mesh_handle: ResMut<NoiseMeshHandle>,
     config: Res<NoiseConfig>,
 ) {
-    let noise = Noise::new(
-        config.seed,
-        config.width,
-        config.height,
-        config.scale,
-        config.octaves,
-        config.persistance,
-        config.lacunarity,
-        config.offset,
-    )
-    .generate_map();
-    let map = &noise.noise_map;
+    let subdivisions = config.subdivisions;
+    let noise = Noise::from(config).generate_map();
 
-    let mut plane = Mesh::from(Plane {
-        size: 15.,
-        // vertices.length=(subdivision+2)^2
-        subdivisions: config.subdivisions,
-    });
-    colorize(&mut plane, &noise, map);
+    let mut plane = Mesh::new(PrimitiveTopology::TriangleList).with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        {
+            let mut vertices = vec![Vec3::ZERO; noise.width() * noise.height()];
+            for y in 0..noise.height() {
+                for x in 0..noise.width() {
+                    todo!()
+                }
+            }
+            vertices
+        },
+    );
+    colorize(&mut plane, &noise);
     let handle = meshes.add(plane);
     noise_mesh_handle.0 = handle.clone();
     commands
@@ -91,39 +92,18 @@ fn update_noise(
     mut meshes: ResMut<Assets<Mesh>>,
     config: Res<NoiseConfig>,
 ) {
-    let noise = Noise::new(
-        config.seed,
-        config.width,
-        config.height,
-        config.scale,
-        config.octaves,
-        config.persistance,
-        config.lacunarity,
-        config.offset,
-    )
-    .generate_map();
-    let map = &noise.noise_map;
+    let noise = Noise::from(config).generate_map();
 
     if let Some(mesh) = meshes.get_mut(noise_mesh_handle.0.clone()) {
-        colorize(mesh, &noise, map)
+        colorize(mesh, &noise)
     }
 }
 
-fn colorize(plane: &mut Mesh, noise: &Noise, map: &[f64]) {
-    if let Some(VertexAttributeValues::Float32x3(positions)) =
-        plane.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+fn colorize(plane: &mut Mesh, noise: &Noise<Generated>) {
+    if let Some(VertexAttributeValues::Float32x3(_positions)) =
+        plane.attribute(Mesh::ATTRIBUTE_POSITION)
     {
-        let mut colors: Vec<[f32; 4]> = vec![[0.0, 0.0, 0.0, 0.0]; noise.height() * noise.width()];
-        for y in 0..noise.height() {
-            for x in 0..noise.width() {
-                let val = map[x + y * noise.width()];
-                // let num = ((val * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
-                // let cl = Color::rgb_u8(num, num, num).as_linear_rgba_f32();
-                let cl = crate::utils::color_lerp(Color::BLACK, Color::WHITE, val as f32);
-                // FIXME
-                colors[x + y * noise.width()] = cl.into();
-            }
-        }
+        let colors = noise.colorize_map();
         plane.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     }
 }
@@ -138,9 +118,12 @@ pub struct NoiseConfig {
     seed: u32,
     subdivisions: u32,
     octaves: usize,
+    #[inspector(min = 0.0, max = 1.0)]
     persistance: f64,
     lacunarity: f64,
     offset: Vec2,
+    draw_mode: DrawMode,
+    regions: Vec<TerrainType>,
 }
 
 impl Default for NoiseConfig {
@@ -155,11 +138,29 @@ impl Default for NoiseConfig {
             persistance: 0.5,
             lacunarity: 2.0,
             offset: Default::default(),
+            regions: vec![
+                TerrainType {
+                    height: 0.4,
+                    color: Color::BLUE,
+                    name: "Water".to_string(),
+                },
+                TerrainType {
+                    height: 1.0,
+                    color: Color::GREEN,
+                    name: "Land".to_string(),
+                },
+            ],
+            draw_mode: DrawMode::ColorMap,
         }
     }
 }
 
-pub struct Noise {
+enum Generated {}
+enum Undefined {}
+
+#[derive(typed_builder::TypedBuilder)]
+pub struct Noise<Map> {
+    #[builder(default = noise::Perlin::new(seed.0))]
     perlin: Perlin,
     seed: u32,
     width: usize,
@@ -169,42 +170,81 @@ pub struct Noise {
     persistance: f64,
     lacunarity: f64,
     offset: Vec2,
+    regions: Vec<TerrainType>,
+    draw_mode: DrawMode,
+    #[builder(default = vec![])]
     noise_map: Vec<f64>,
+    #[builder(default = std::marker::PhantomData)]
+    _marker: PhantomData<Map>,
 }
 
-impl Noise {
-    pub fn new(
-        seed: u32,
-        width: usize,
-        height: usize,
-        scale: f64,
-        octaves: usize,
-        persistance: f64,
-        lacunarity: f64,
-        offset: Vec2,
-    ) -> Self {
-        let perlin = Perlin::new(seed);
-        let mut scale = scale;
+#[derive(Reflect, InspectorOptions, Default, Clone)]
+#[reflect(InspectorOptions, Default)]
+pub struct TerrainType {
+    pub height: f64,
+    pub color: Color,
+    pub name: String,
+}
 
-        if scale <= 0.0 {
-            scale = 0.0001
-        }
+#[derive(Reflect, InspectorOptions, Default, Clone)]
+#[reflect(InspectorOptions, Default)]
+pub enum DrawMode {
+    NoiseMap,
+    #[default]
+    ColorMap,
+    Mesh,
+}
 
-        Self {
-            perlin,
-            width,
-            height,
-            scale,
-            noise_map: vec![],
-            octaves,
-            persistance,
-            lacunarity,
-            seed,
-            offset,
-        }
+// region: From impls
+
+impl From<NoiseConfig> for Noise<Undefined> {
+    fn from(value: NoiseConfig) -> Self {
+        Noise::builder()
+            .width(value.width)
+            .height(value.height)
+            .draw_mode(value.draw_mode.clone())
+            .lacunarity(value.lacunarity)
+            .octaves(value.octaves)
+            .offset(value.offset)
+            .regions(value.regions.clone())
+            .persistance(value.persistance)
+            .scale(value.scale)
+            .seed(value.seed)
+            .build()
+    }
+}
+
+impl From<Res<'_, NoiseConfig>> for Noise<Undefined> {
+    fn from(value: Res<'_, NoiseConfig>) -> Self {
+        Noise::builder()
+            .width(value.width)
+            .height(value.height)
+            .draw_mode(value.draw_mode.clone())
+            .lacunarity(value.lacunarity)
+            .octaves(value.octaves)
+            .offset(value.offset)
+            .regions(value.regions.clone())
+            .persistance(value.persistance)
+            .scale(value.scale)
+            .seed(value.seed)
+            .build()
+    }
+}
+
+// endregion: From impls
+
+impl<Map> Noise<Map> {
+    pub fn height(&self) -> usize {
+        self.height
     }
 
-    fn generate_map(self) -> Self {
+    pub fn width(&self) -> usize {
+        self.width
+    }
+}
+
+impl Noise<Undefined> {
+    pub fn generate_map(self) -> Noise<Generated> {
         let mut noise_map = vec![0.0; self.width * self.height];
 
         let mut prng = StdRng::seed_from_u64(self.seed.into());
@@ -258,14 +298,123 @@ impl Noise {
             }
         }
 
-        Self { noise_map, ..self }
+        Noise {
+            noise_map,
+            perlin: self.perlin,
+            seed: self.seed,
+            width: self.width,
+            height: self.width,
+            scale: self.scale,
+            octaves: self.octaves,
+            persistance: self.persistance,
+            lacunarity: self.lacunarity,
+            offset: self.offset,
+            regions: self.regions,
+            draw_mode: self.draw_mode,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Noise<Generated> {
+    pub fn colorize_map(&self) -> Vec<[f32; 4]> {
+        match self.draw_mode {
+            DrawMode::NoiseMap => {
+                let mut colors: Vec<[f32; 4]> =
+                    vec![[0.0, 0.0, 0.0, 0.0]; self.height * self.width];
+                for y in 0..self.height {
+                    for x in 0..self.width {
+                        let val = self.noise_map[x + y * self.width];
+                        let cl = crate::utils::color_lerp(Color::BLACK, Color::WHITE, val as f32);
+                        colors[x + y * self.width] = cl.into();
+                    }
+                }
+                colors
+            }
+            DrawMode::ColorMap | DrawMode::Mesh => {
+                let mut colors = vec![[0.0, 0.0, 0.0, 0.0]; self.width * self.height];
+                for y in 0..self.height {
+                    for x in 0..self.width {
+                        let current_height = self.noise_map[x + y * self.width];
+                        for region in self.regions.iter() {
+                            if current_height <= region.height {
+                                colors[x + y * self.width] = region.color.into();
+                                break;
+                            }
+                        }
+                    }
+                }
+                colors
+            }
+        }
     }
 
-    pub fn height(&self) -> usize {
-        self.height
+    pub fn generate_mesh(&self) -> MeshData {
+        let top_left_x = (self.width - 1) as f32 / -2.0;
+        let top_left_z = (self.height - 1) as f32 / 2.0;
+
+        let mut mesh_data = MeshData::new(self.width, self.height);
+        let mut vertex_index: usize = 0;
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                mesh_data.vertices[vertex_index] = Vec3::new(
+                    top_left_x + x as f32,
+                    self.noise_map[x + y * self.width] as f32,
+                    top_left_z - y as f32,
+                );
+                mesh_data.uvs[vertex_index] =
+                    Vec2::new(x as f32 / self.width as f32, y as f32 / self.height as f32);
+
+                if x < self.width - 1 && y < self.height - 1 {
+                    mesh_data.add_triangle(
+                        vertex_index,
+                        vertex_index + self.width + 1,
+                        vertex_index + self.width,
+                    );
+                    mesh_data.add_triangle(
+                        vertex_index + self.width + 1,
+                        vertex_index,
+                        vertex_index + 1,
+                    );
+                }
+
+                vertex_index += 1;
+            }
+        }
+        mesh_data
+    }
+}
+
+pub struct MeshData {
+    pub vertices: Vec<Vec3>,
+    pub triangles: Vec<usize>,
+    pub uvs: Vec<Vec2>,
+    triangle_index: usize,
+}
+
+impl MeshData {
+    pub fn new(mesh_width: usize, mesh_height: usize) -> Self {
+        Self {
+            vertices: vec![Vec3::ZERO; mesh_width * mesh_height],
+            triangles: vec![0; (mesh_width - 1) * (mesh_height - 1) * 6],
+            uvs: vec![Vec2::ZERO; mesh_width * mesh_height],
+            triangle_index: 0,
+        }
     }
 
-    pub fn width(&self) -> usize {
-        self.width
+    pub fn add_triangle(&mut self, a: usize, b: usize, c: usize) {
+        self.triangles[self.triangle_index] = a;
+        self.triangles[self.triangle_index + 1] = b;
+        self.triangles[self.triangle_index + 2] = c;
+        self.triangle_index += 3;
+    }
+
+    pub fn create_mesh(&self) -> Mesh {
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.vertices.clone())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs.clone());
+        mesh.compute_flat_normals();
+        mesh
     }
 }

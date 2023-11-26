@@ -16,8 +16,7 @@ opt-level = 3
 [dependencies]
 noise = { version = "0.8.2", features = ["images"] }
 rand = "0.8.5"
-ndarray = "0.15"
-image = "0.24.7"
+typed-builder = "0.18.0"
 
 bevy_third_person_camera = "0.1.7"
 bevy-inspector-egui = "0.21.0"
